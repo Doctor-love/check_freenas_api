@@ -303,7 +303,7 @@ def parse_args(description=None, version=None, developers=None, license=None):
     mode_vol_usage.add_argument(
         '-c', '--critical',
         help='Warning threshold for usage in percent (default: %(default)s)',
-        metavar='RANGE', type=str, default='70')
+        metavar='RANGE', type=str, default='90')
 
     mode_vol_usage.add_argument(
         '-b', '--brief-status',
@@ -334,8 +334,6 @@ class VolumeUsageCheck(nagiosplugin.Resource):
         self.volume_name = volume_name
         self.include = include
         self.exclude = exclude
-
-        print str(include)
 
     def probe(self):
         _log.info('Querying volume usage percentage')
