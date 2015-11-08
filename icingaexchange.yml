@@ -1,0 +1,18 @@
+name: check_freenas_api
+description: "file:///README.md"
+url: "https://github.com/Doctor-love/check_freenas_api"
+tags: freenas
+vendor: Other
+target: FreeNAS
+type: Plugin
+license: gplv2
+releases: 
+  - 
+    name: 0.2
+    description: "0.2 Release"
+    files: 
+      - 
+        name: check_freenas_api
+        url: "file:///check_freenas_api.py"
+        description: "Check plugin"
+        checksum: 616dadf4b9ec1c7c0b23e830ca378932
