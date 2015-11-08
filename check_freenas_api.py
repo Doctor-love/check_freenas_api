@@ -5,11 +5,10 @@ This plugin utilizes the REST API and have been tested on FreeNAS 9.3.1'''
 
 developers = ['Joel Rangsmo <joel@rangsmo.se>']
 description = __doc__
-version = '0.1'
+version = '0.2'
 license = 'GPLv2'
 
 try:
-    import time
     import logging
     import argparse
     import requests
@@ -111,11 +110,11 @@ class FreeNASSession(object):
                 'Could not connect to "%s:%i"' % (self.server, self.port))
 
         except requests.exceptions.RequestException as error_msg:
-            raise QueryError(
+            raise ConnectionError(
                 'Failed to connect to FreeNAS API: "%s"' % error_msg)
 
         except Exception as error_msg:
-            raise QueryError(
+            raise ConnectionError(
                 'Failed to connect to FreeNAS API: "%s"' % error_msg)
 
         _log.debug('Raw query response: "%s"' % str(query.text))
@@ -311,10 +310,24 @@ def parse_args(description=None, version=None, developers=None, license=None):
         action='store_true', default=False)
 
     # -------------------------------------------------------------------------
-    # Completes argument parsing
-    args = parser.parse_args()
+    mode_sys_alerts = parser_mode.add_parser(
+        'system-alerts',
+        description='Checks if unhandled system alerts have been triggered',
+        epilog='API version support: 1.0 (full)')
 
-    return args
+    mode_sys_alerts.add_argument(
+        '-e', '--exclude',
+        help='Comma separate list of alert messages to exclude',
+        metavar='"smartd is not running"', type=split_string)
+
+    mode_sys_alerts.add_argument(
+        '-b', '--brief-status',
+        help='Provide brief alert oveview in status output',
+        action='store_true', default=False)
+
+    # -------------------------------------------------------------------------
+    # Completes argument parsing
+    return parser.parse_args()
 
 # -----------------------------------------------------------------------------
 # Acquisition, evaluation and presentation for check modes.
@@ -362,6 +375,10 @@ class VolumeUsageCheck(nagiosplugin.Resource):
                     continue
 
                 # FreeNAS API ain't all that robot friendly...
+                if volume['used_pct'] == 'Error':
+                    raise ResponseError(
+                        'Checked volume "%s" is experiencing issues' % name)
+
                 usage = int(volume['used_pct'].replace('%', ''))
 
                 yield nagiosplugin.Metric(
@@ -371,6 +388,9 @@ class VolumeUsageCheck(nagiosplugin.Resource):
                 if self.volume_name and name == self.volume_name:
                     _log.info('Found volume "%s" - breaking loop' % name)
                     break
+
+        except ResponseError as error_msg:
+            raise PluginError('Failed to extract volume usage: %s' % error_msg)
 
         except Exception as error_msg:
             _log.error('Failed to extract query data: "%s"' % error_msg)
@@ -393,8 +413,6 @@ class VolumeUsageSummary(nagiosplugin.Summary):
         overall_status = 'Volume usage status: '
 
         for result in results:
-            volume_status = str(result)
-
             overall_status += str(result) + ', '
 
         # Removes the trailing space and comma characters
@@ -406,6 +424,122 @@ class VolumeUsageSummary(nagiosplugin.Summary):
 
     def empty(self):
         return 'Found no volumes matching filtering requirements'
+
+# -----------------------------------------------------------------------------
+# Mode - "system-alerts"
+class SystemAlertsCheck(nagiosplugin.Resource):
+    '''Checks if any unhandled system alerts exist'''
+
+    def __init__(self, session=None, api_version=None, exclude=None):
+        self.session = session
+        self.api_version = api_version
+        self.exclude = exclude
+
+    def probe(self):
+        _log.info('Querying list of system alerts')
+
+        alerts = self.session.get('system/alert/')
+
+        try:
+            _log.debug('Extracting status for %i alerts' % len(alerts))
+
+            triggered_alerts = 0
+
+            for alert in alerts:
+                message = str(alert['message']).strip()
+                dismissed = bool(alert['dismissed'])
+
+                _log.debug('Checking filtering for message "%s"' % message)
+
+                if dismissed:
+                    _log.debug('Alert has already been acknowledged')
+                    continue
+
+                elif self.exclude and message in self.exclude:
+                    _log.debug('Matched "%s" - excluding message' % message)
+                    continue
+
+                level = str(alert['level'])
+
+                yield nagiosplugin.Metric(
+                    name=message, context='alert', value=level)
+
+                triggered_alerts += 1
+
+        except Exception as error_msg:
+            _log.error('Failed to extract query data: "%s"' % error_msg)
+            raise PluginError('Failed to extract system alert data from query')
+
+        # Strange looking work-around for *INSERT BUG ID*
+        if triggered_alerts is 0:
+            yield nagiosplugin.Metric(
+                name='Found no unhandled alerts', context='alert', value='')
+
+
+class SystemAlertsContext(nagiosplugin.Context):
+    '''Evaluates the status of system alerts'''
+
+    def evaluate(self, metric, resource):
+        _log.debug('Checking status of alert "%s"' % metric.name)
+
+        # If no unhandled system alerts exist
+        if not metric.value:
+            return self.result_cls(
+                nagiosplugin.state.Ok, 'No alerts exist', metric)
+
+        elif metric.value == 'OK':
+            return self.result_cls(
+                nagiosplugin.state.Ok, '"%s"' % metric.name, metric)
+
+        elif metric.value == 'WARN':
+            return self.result_cls(
+                nagiosplugin.state.Warn, '"%s"' % metric.name, metric)
+
+        elif metric.value == 'CRIT':
+            return self.result_cls(
+                nagiosplugin.state.Critical, '"%s"' % metric.name, metric)
+
+        else:
+            return self.result_cls(
+                nagiosplugin.state.Unknown,
+                'Alert level "%s" is not known' % str(metric.value), metric)
+
+
+class SystemAlertsSummary(nagiosplugin.Summary):
+    '''Summarises the status of triggered system alerts'''
+
+    def __init__(self, brief_status=None):
+        self.brief_status = brief_status
+
+    def ok(self, results):
+        return self.empty()
+
+    def problem(self, results):
+        _log.debug('Building problem output for system alerts')
+
+        worst_state = str(results.most_significant_state)
+
+        if self.brief_status:
+            _log.debug('Building brief status output message')
+
+            return (
+                'Found %i unhandled system alert(s) with status %s'
+                % (len(results.most_significant), worst_state))
+
+        # Generates detailed status output
+        overall_status = 'System alerts in worst state: '
+
+        for result in results.most_significant:
+            if worst_state == "Unknown":
+                return 'Encountered problems in alert check: %s' % str(result)
+
+            overall_status += str(result) + ', '
+
+        # Removes the trailing space and comma characters
+        return overall_status[:-2]
+
+    def empty(self):
+        return 'Found no unhandled system alerts'
 
 # -----------------------------------------------------------------------------
 # Main function related code
@@ -433,6 +567,15 @@ def main():
 
         nagiosplugin.ScalarContext('usage', args.warning, args.critical),
         VolumeUsageSummary(args.brief_status))
+
+    elif args.mode == 'system-alerts':
+        check = nagiosplugin.Check(
+            SystemAlertsCheck(
+                session=session, api_version=args.api_version,
+                exclude=args.exclude),
+
+        SystemAlertsContext('alert'),
+        SystemAlertsSummary(args.brief_status))
 
     # Run the specified check mode
     check.name = 'FN'
