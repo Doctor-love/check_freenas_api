@@ -2,7 +2,7 @@
 Monitoring/Nagios plugin for FreeNAS systems
 
 ### Overview
-The check_freenas_api monitoring plugin utilizes the FreeNAS REST API for status monitoring.
+The check_freenas_api monitoring plugin utilizes the FreeNAS REST API for status monitoring.  
 It's designed to be easily extendable with new "check modes" for monitoring different parts of the system.
 
 **Use the plugin at your own risk and keep in mind that all contributions are appreciated!**
@@ -11,6 +11,10 @@ It's designed to be easily extendable with new "check modes" for monitoring diff
 
 ###### "volume-usage":
 Checks the usage percentage of all or specified volumes.  
+API version support: 1.0 (full)
+
+###### "system-alerts":
+Checks if any unhandled system alerts have been triggered.  
 API version support: 1.0 (full)
 
 ### Installation and configuration
