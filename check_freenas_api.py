@@ -5,7 +5,7 @@ This plugin utilizes the REST API and have been tested on FreeNAS 9.3.1'''
 
 developers = ['Joel Rangsmo <joel@rangsmo.se>']
 description = __doc__
-version = '0.2'
+version = '0.3'
 license = 'GPLv2'
 
 try:
@@ -13,6 +13,8 @@ try:
     import argparse
     import requests
     import nagiosplugin
+
+    from sys import exit
 
 except ImportError as missing:
     print(
@@ -69,6 +71,9 @@ class FreeNASSession(object):
         self.base_path = (
             'https://%s:%i/api/v%s/' % (server, self.port, self.api_version))
 
+        # Description to be included in error messages
+        self.server_info = '%s:***@%s:%i' % (self.user, self.server, self.port)
+
         # Creates requests session object
         self.session = requests.Session()
 
@@ -87,19 +92,24 @@ class FreeNASSession(object):
             except:
                 _log.debug('Failed to disable urllib3 warnings')
 
-    def get(self, sub_path):
+    def get(self, sub_path, params={}):
         '''Retrive data from specified API path.
         Returns the decoded response and raises APIError in case of issues'''
 
-        _log.debug('Retriving data from %s%s...' % (self.base_path, sub_path))
+        if not isinstance(params, dict):
+            raise ValueError('Argument "params" wasn\'t provided as dictonary')
+
+        _log.debug(
+            'Retriving data from %s%s with parameters: "%s"'
+            % (self.base_path, sub_path, str(params)))
 
         try:
-            query = self.session.get(self.base_path + sub_path)
+            query = self.session.get(self.base_path + sub_path, params=params)
     
         except requests.exceptions.Timeout:
             raise ConnectionError(
-                'Connection to "%s:%i" timed out after %i seconds'
-                % (self.server, self.port, self.timeout))
+                'Connection to "%s" timed out after %i seconds'
+                % (self.server_info, self.timeout))
 
         # Work-around for https://github.com/shazow/urllib3/issues/556
         except (requests.exceptions.SSLError, TypeError):
@@ -107,7 +117,7 @@ class FreeNASSession(object):
 
         except requests.exceptions.Timeout:
             raise ConnectionError(
-                'Could not connect to "%s:%i"' % (self.server, self.port))
+                'Could not connect to "%s"' % self.server_info)
 
         except requests.exceptions.RequestException as error_msg:
             raise ConnectionError(
@@ -332,9 +342,10 @@ def parse_args(description=None, version=None, developers=None, license=None):
 # -----------------------------------------------------------------------------
 # Acquisition, evaluation and presentation for check modes.
 # Documentation: https://pythonhosted.org/nagiosplugin/tutorial/index.html
-
+#
 # -----------------------------------------------------------------------------
 # Mode - "volume-usage"
+
 class VolumeUsageCheck(nagiosplugin.Resource):
     '''Checks the usage percentage of volumes'''
 
@@ -351,7 +362,7 @@ class VolumeUsageCheck(nagiosplugin.Resource):
     def probe(self):
         _log.info('Querying volume usage percentage')
 
-        volumes = self.session.get('storage/volume/')
+        volumes = self.session.get('storage/volume/', {'limit': 90000000001})
 
         try:
             _log.debug('Extracting usage data for %i volumes' % len(volumes))
@@ -427,6 +438,7 @@ class VolumeUsageSummary(nagiosplugin.Summary):
 
 # -----------------------------------------------------------------------------
 # Mode - "system-alerts"
+
 class SystemAlertsCheck(nagiosplugin.Resource):
     '''Checks if any unhandled system alerts exist'''
 
